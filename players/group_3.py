@@ -5,6 +5,8 @@ from collections import deque
 
 import numpy as np
 import logging
+from scipy.optimize import linear_sum_assignment
+import miniball
 
 import constants
 
@@ -155,13 +157,11 @@ class Player:
         self.preplanned_moves.append([target_pos[0], target_pos[1]])
 
     def triangle(self, current_percept):
-        polygons = current_percept.polygons
         turn_number = current_percept.turn_number
         cur_pos = current_percept.cur_pos
         requests = sorted(current_percept.requests)
         cake_len = current_percept.cake_len
         cake_width = current_percept.cake_width
-        cake_area = cake_len * cake_width
 
         if turn_number == 1:
             self.preplanned_moves.append([0,0])
@@ -195,21 +195,55 @@ class Player:
             self.request_served += 1
             return constants.CUT, [dest_x, dest_y]
         
-        assignment = []
-        polygon_idx = list(np.argsort([polygon.area for polygon in polygons]))
+        assignment = self.assign_polygons_to_requests(current_percept) 
+        return constants.ASSIGN, assignment
 
-        if len(requests) == 1:
-            polygon_idx.remove(0)
-        elif len(polygon_idx) > 1:
-            polygon_idx.remove(len(polygon_idx) // 2)
+    def assign_polygons_to_requests(self, current_percept):
+        requests = current_percept.requests
+        polygons = current_percept.polygons
         
-        req_idx = list(np.argsort(np.argsort(current_percept.requests)))
-        
-        for idx in req_idx:
-            assignment.append(int(polygon_idx[idx]))
-        return constants.ASSIGN, assignment 
+        tolerance = self.tolerance
+        num_requests = len(requests)
+        num_polygons = len(polygons)
+
+        cost_matrix = np.full((num_requests, num_polygons), fill_value=1e6)
+
+        for i, request_area in enumerate(requests):
+            for j, polygon in enumerate(polygons):
+                piece_area = polygon.area
+
+                size_difference = abs(piece_area - request_area)
+                percentage_difference = (size_difference / request_area) * 100
+                
+                if percentage_difference <= tolerance:
+                    area_penalty = 0
+                else:
+                    area_penalty = percentage_difference
+                    
+                fits_on_plate = self.can_cake_fit_in_plate(polygon)
+                plate_penalty = 0 if fits_on_plate else 1000
+
+                total_penalty = area_penalty + plate_penalty
+
+                cost_matrix[i, j] = total_penalty
+
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+        assignment = [-1] * num_requests
+        assigned_polygons = set()
+
+        for req_idx, poly_idx in zip(row_ind, col_ind):
+            penalty = cost_matrix[req_idx, poly_idx]
+            if penalty < 1e5:
+                assignment[req_idx] = int(poly_idx)
+                assigned_polygons.add(poly_idx)
+            else:
+                pass
+
+        return assignment
     
-    def gradient_descent(self, current_percept, cuts):
-
-        return
+    def can_cake_fit_in_plate(self, cake_piece, radius=12.5):
+        cake_points = np.array(list(zip(*cake_piece.exterior.coords.xy)), dtype=np.double)
+        res = miniball.miniball(cake_points)
+        return res["radius"] <= radius
 
