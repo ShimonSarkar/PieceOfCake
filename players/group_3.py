@@ -34,10 +34,18 @@ class Player:
         self.request_served = 0
 
     def move(self, current_percept) -> Tuple[int, List[int]]:
-        horizontal_cuts, vertical_cuts = self.init_cuts(current_percept=current_percept)  # TODO: just for debug and demonstration, move elsewhere later
+        cuts = self.init_cuts(current_percept=current_percept)  # TODO: just for debug and demonstration, move elsewhere later
         if current_percept.cake_len <= self.triangle_viable:
             return self.triangle(current_percept)
         return self.quadrangle(current_percept)
+    
+    def find_factor_pairs(self, n):
+        factor_pairs = []
+        for i in range(1, int(n**0.5) + 1):
+            if n % i == 0:
+                # (i, n // i) is a factor pair
+                factor_pairs.append((i, n // i))
+        return factor_pairs
 
     def init_cuts(self, current_percept) -> Tuple[List[List[int]]]:
         """
@@ -47,15 +55,33 @@ class Player:
         ([[y1, y1], [y2, y2]], [[x1, x1], [x2, x2]])          # i.e., (HORIZONTAL_CUTS, VERTICAL_CUTS)
         """
         cake_len, cake_width = current_percept.cake_len, current_percept.cake_width
-        row_count, col_count = 2, 4
-        row_height, col_width = cake_len / row_count, cake_width / col_count
 
-        horizontal_cuts = [[i * row_height, i * row_height] for i in range(1, row_count)]
-        vertical_cuts = [[i * col_width, i * col_width] for i in range(1, col_count)]
+        working_pairs = []
+        extra_pieces = 0
+        extra_area = cake_len * cake_width * 0.05
+        while not working_pairs:
+            mod_requests = current_percept.requests
+            mod_requests += [extra_area / extra_pieces for _ in range(extra_pieces)]
+            factor_pairs = self.find_factor_pairs(len(mod_requests))
 
-        print(f"{cake_len=}, {cake_width=}")
-        print(f"init_{horizontal_cuts=}, {vertical_cuts=}")
-        return horizontal_cuts, vertical_cuts
+            for factor_pair in factor_pairs:
+                num_rows, num_cols = factor_pair
+                row_height, col_width = cake_len / num_rows, cake_width / num_cols
+                fits_plate = np.sqrt(row_height**2 + col_width**2) <= 25
+                if fits_plate:
+                    working_pairs.append(factor_pair)
+
+            extra_pieces += 1
+
+        cuts = {}
+        for working_pair in working_pairs:
+            num_rows, num_cols = working_pair
+            row_height, col_width = cake_len / num_rows, cake_width / num_cols
+            horizontal_cuts = [[i * row_height, i * row_height] for i in range(1, num_rows)]
+            vertical_cuts = [[i * col_width, i * col_width] for i in range(1, num_cols)]
+            cuts[working_pair] = (horizontal_cuts, vertical_cuts)
+
+        return cuts
 
     def quadrangle(self, current_percept):
         polygons = current_percept.polygons
@@ -145,7 +171,7 @@ class Player:
             area = requests[self.request_served]
             base = round(2 * area / cake_len, 2)
 
-            cur_x, cur_y = cur_pos[0], cur_pos[1]
+            cur_y = cur_pos[1]
 
             if turn_number == 2:
                 if cake_len ** 2 + base ** 2 > 25 ** 2:
@@ -182,5 +208,8 @@ class Player:
         for idx in req_idx:
             assignment.append(int(polygon_idx[idx]))
         return constants.ASSIGN, assignment 
+    
+    def gradient_descent(self, current_percept, cuts):
 
+        return
 
