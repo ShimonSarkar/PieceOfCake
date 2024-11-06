@@ -137,13 +137,40 @@ class Player:
         requests = self.current_percept.requests
         cake_len = self.current_percept.cake_len
         cake_width = self.current_percept.cake_width
+        #added
+        num_requests = len(requests)
 
+        # if turn_number == 1:
+        #     self.grid_optimizer = GridOptimizer(
+        #         cake_width=cake_width,
+        #         cake_len=cake_len,
+        #         num_row_divisions=4,
+        #         num_col_divisions=5,
+        #         requests=requests,
+        #         tolerance=self.tolerance,
+        #         learning_rate=0.01,
+        #         convergence_threshold=1e-4
+        #     )
+        #     self.grid_optimizer.run_optimization(max_evals=1000, method=SearchMethod.UNIFORM)
+            
+        #     return constants.INIT, [0, 0.01]
+        
+        #New fix:
         if turn_number == 1:
+            # Ensure that the grid can handle all requests
+            min_num_rows = int(np.ceil(np.sqrt(num_requests)))
+            # min_num_cols = int(np.ceil(num_requests * min_num_rows/num_requests))
+            min_num_cols = int(np.ceil(num_requests / min_num_rows))
+
+            if min_num_rows * min_num_cols < num_requests:
+                min_num_rows += 1  
+                min_num_cols = int(np.ceil(num_requests / min_num_rows))
+
             self.grid_optimizer = GridOptimizer(
                 cake_width=cake_width,
                 cake_len=cake_len,
-                num_row_divisions=4,
-                num_col_divisions=5,
+                num_row_divisions=min_num_rows, 
+                num_col_divisions=min_num_cols, 
                 requests=requests,
                 tolerance=self.tolerance,
                 learning_rate=0.01,
@@ -152,6 +179,7 @@ class Player:
             self.grid_optimizer.run_optimization(max_evals=1000, method=SearchMethod.UNIFORM)
             
             return constants.INIT, [0, 0.01]
+        
         
         if turn_number == 2:
             cur_x, cur_y = cur_pos[0], cur_pos[1]
