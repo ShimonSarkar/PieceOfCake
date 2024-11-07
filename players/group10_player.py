@@ -50,7 +50,7 @@ class Player:
                     RIGHT = 2
                     DOWN = 3
         """
-        extra_tol = 30 #Change if we suck
+        extra_tol = 40 #Change if we suck
 
         polygons = current_percept.polygons
         turn_number = current_percept.turn_number
@@ -213,10 +213,13 @@ class Player:
     def grid_cut(self, current_percept, grid_area) -> list[float, float]:
         # print("IN GRID CUT")
         print(self.cake_len)
-        length_shave = 0.01266028 * self.cake_len
+        # length_shave = 0.01266028 * self.cake_len
+        
+        # width_shave = round(1.6 * length_shave, 2)
+        # length_shave = round(length_shave, 2)
 
-        width_shave = round(1.6 * length_shave, 2)
-        length_shave = round(length_shave, 2)
+        width_shave = 0.01
+        length_shave = 0.01
 
         # print("BEFORE FACTORS")
         s_factor, l_factor = self.find_closest_factors()
@@ -243,12 +246,12 @@ class Player:
                 self.uniform_cuts.append([self.cake_width, y_cuts[i]])
             elif i % 2 == 1:
                 self.uniform_cuts.append([round(self.cake_width - (0.01 + self.used_crumb[1][0]), 2), 0])
-                self.used_crumb[1][0] += 0.01
+                # self.used_crumb[1][0] += 0.01
                 self.uniform_cuts.append([self.cake_width, y_cuts[i]])
                 self.uniform_cuts.append([0, y_cuts[i]])
             elif i % 2 == 0:
                 self.uniform_cuts.append([round(0.01 + self.used_crumb[0][0], 2), 0])
-                self.used_crumb[0][0] += 0.01
+                # self.used_crumb[0][0] += 0.01
                 self.uniform_cuts.append([0, y_cuts[i]])
                 self.uniform_cuts.append([self.cake_width, y_cuts[i]])
 
@@ -259,12 +262,12 @@ class Player:
                     self.uniform_cuts.append([x_cuts[i], 0])
                 elif i % 2 == 1:
                     self.uniform_cuts.append([0, round((0.01 + self.used_crumb[0][1]), 2)])
-                    self.used_crumb[0][1] += 0.01
+                    # self.used_crumb[0][1] += 0.01
                     self.uniform_cuts.append([x_cuts[i], 0])
                     self.uniform_cuts.append([x_cuts[i], self.cake_len])
                 elif i % 2 == 0:
                     self.uniform_cuts.append([0, round(self.cake_len - (0.01 + self.used_crumb[2][1]), 2)])
-                    self.used_crumb[2][1] += 0.01
+                    # self.used_crumb[2][1] += 0.01
                     self.uniform_cuts.append([x_cuts[i], self.cake_len])
                     self.uniform_cuts.append([x_cuts[i], 0])
             elif l_factor % 2 == 0:
@@ -273,12 +276,12 @@ class Player:
                     self.uniform_cuts.append([round(self.cake_width - x_cuts[i], 2), 0])
                 elif i % 2 == 1:
                     self.uniform_cuts.append([self.cake_width, round((0.01 + self.used_crumb[1][1]), 2)])
-                    self.used_crumb[1][1] += 0.01
+                    # self.used_crumb[1][1] += 0.01
                     self.uniform_cuts.append([round(self.cake_width - x_cuts[i], 2), 0])
                     self.uniform_cuts.append([round(self.cake_width - x_cuts[i], 2), self.cake_len])
                 elif i % 2 == 0:
                     self.uniform_cuts.append([self.cake_width, round(self.cake_len - (0.01 + self.used_crumb[3][1]), 2)])
-                    self.used_crumb[3][1] += 0.01
+                    # self.used_crumb[3][1] += 0.01
                     self.uniform_cuts.append([round(self.cake_width - x_cuts[i], 2), self.cake_len])
                     self.uniform_cuts.append([round(self.cake_width - x_cuts[i], 2), 0])
                 

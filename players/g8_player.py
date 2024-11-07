@@ -3,7 +3,7 @@ import pickle
 from typing import List
 
 import logging
-
+from uuid import uuid4
 import numpy as np
 
 from shapely.geometry import Polygon, LineString, Point
@@ -12,6 +12,7 @@ from shapely.ops import split
 from scipy.optimize import linear_sum_assignment
 
 import miniball
+from tqdm import tqdm
 
 import constants
 from piece_of_cake_state import PieceOfCakeState
@@ -62,7 +63,7 @@ class G8_Player:
         self.edges = None
         self.cake = None
         self.solution = None
-        self.solution_polygons = None
+        self.beam_uuid_to_pieces = {}
 
     def move(self, current_percept: PieceOfCakeState) -> tuple[int, List[int]]:
         """Function that retrieves the current state of the cake map and returns an cake movement
@@ -100,13 +101,12 @@ class G8_Player:
             ]
 
             self.solution = self.solve()
-            self.solution_polygons = list(self.solution)
             x, y = self.solution.pop(0)
 
             return constants.INIT, [round(x, 2), round(y, 2)]
 
         if len(self.solution) == 0:
-            return self.assign_polygons(self.solution_polygons)
+            return self.assign_polygons(current_percept.polygons)
 
         x, y = self.solution.pop(0)
 
@@ -116,50 +116,60 @@ class G8_Player:
         """Find optimal cutting sequence using beam search"""
         beam_width = min(50, len(self.requests) * 5)
         max_depth = len(self.requests) + 1
+        counter = 0
 
         # Initialize beam with possible first points
         initial_points = self.generate_initial_points()
-        beam = [(0, [point]) for point in initial_points]
+        beam = [(0, [point], uuid4()) for point in initial_points]
 
         best_solution = None
         best_score = float("inf")
 
-        for _ in range(max_depth - 1):
-            new_beam = []
+        with tqdm(total=max_depth) as pbar:
+            while counter < max_depth:
+                new_beam = []
 
-            for _, current_points in beam:
-                next_points = self.generate_next_points(current_points[-1])
+                for _, current_points, uuid in beam:
+                    next_points = self.generate_next_points(current_points[-1])
 
-                for next_point in next_points:
-                    if len(current_points) > 1:
-                        if not self.is_valid_cut(
-                            current_points[-1], next_point, current_points
-                        ):
+                    for next_point in next_points:
+                        if len(current_points) > 1:
+                            if not self.is_valid_cut(
+                                current_points[-1], next_point, current_points
+                            ):
+                                continue
+
+                        new_points = current_points + [next_point]
+                        penalty, cut_length, new_beam_uuid = self.evaluate_cut_sequence(
+                            new_points, uuid
+                        )
+                        score = penalty + cut_length * 1e-6
+
+                        if penalty > best_score:
                             continue
 
-                    new_points = current_points + [next_point]
-                    penalty, cut_length = self.evaluate_cut_sequence(new_points)
-                    score = penalty + cut_length * 1e-6
+                        if penalty <= best_score:
+                            best_score = penalty
+                            best_solution = new_points
 
-                    if penalty > best_score:
-                        continue
+                        new_beam.append((score, new_points, new_beam_uuid))
 
-                    if penalty <= best_score:
-                        best_score = penalty
-                        best_solution = new_points
+                    # We should never use this beam uuids again
+                    if uuid in self.beam_uuid_to_pieces:
+                        del self.beam_uuid_to_pieces[uuid]
 
-                    new_beam.append((score, new_points))
+                # Keep best beam_width solutions
+                beam = sorted(new_beam, key=lambda x: x[0])[:beam_width]
+                counter += 1
+                pbar.update(1)
 
-            # Keep best beam_width solutions
-            beam = sorted(new_beam, key=lambda x: x[0])[:beam_width]
-
-        if best_solution is None:
-            raise ValueError("No valid solution found")
+            if best_solution is None:
+                raise ValueError("No valid solution found")
 
         return best_solution
 
     def evaluate_cut_sequence(
-        self, points: list[tuple[float, float]]
+        self, points: list[tuple[float, float]], uuid
     ) -> tuple[float, float]:
         """Evaluate a sequence of cut endpoints, returning (penalty, total_cut_length)"""
         # Convert points to cuts
@@ -167,21 +177,25 @@ class G8_Player:
         for i in range(len(points) - 1):
             cuts.append(LineString([points[i], points[i + 1]]))
 
-        # Split cake into pieces
-        pieces = [self.cake]
-        for cut in cuts:
-            new_pieces = []
-            for piece in pieces:
-                if cut.intersects(piece):
-                    split_result = split(piece, cut)
-                    new_pieces.extend(list(split_result.geoms))
-                else:
-                    new_pieces.append(piece)
-            pieces = new_pieces
+        cut = cuts[0] if len(cuts) == 1 else cuts[-1]
+
+        pieces = [self.cake] if len(cuts) == 1 else self.beam_uuid_to_pieces[uuid]
+
+        new_pieces = []
+        for piece in pieces:
+            if cut.intersects(piece):
+                split_result = split(piece, cut)
+                new_pieces.extend(list(split_result.geoms))
+            else:
+                new_pieces.append(piece)
+        pieces = new_pieces
+
+        new_beam_uuid = uuid4()
+        self.beam_uuid_to_pieces[new_beam_uuid] = pieces
 
         # Calculate penalties (handles both area mismatches and plate fitting)
         penalties = self.calculate_penalties(pieces)
-        return penalties, self.calculate_cut_length(points)
+        return penalties, self.calculate_cut_length(points), new_beam_uuid
 
     def generate_initial_points(self):
         """Generate possible starting points along the perimeter"""
@@ -199,7 +213,7 @@ class G8_Player:
     def generate_next_points(self, current_point: tuple[float, float]):
         """Generate possible next points on valid edges"""
         points = []
-        samples = 25
+        samples = 12
 
         current_edge = self.get_edge(current_point)
 
@@ -314,23 +328,10 @@ class G8_Player:
 
         return total_penalty
 
-    def assign_polygons(self, cuts: list[tuple[float, float]]) -> tuple[str, list[int]]:
+    def assign_polygons(self, pieces: list[Polygon]) -> tuple[str, list[int]]:
         """
         Get optimal mapping of requests to pieces using exact game penalty calculation.
         """
-        # Get pieces after all cuts
-        pieces = [self.cake]
-        for i in range(len(cuts) - 1):
-            cut_line = LineString([cuts[i], cuts[i + 1]])
-            new_pieces = []
-            for piece in pieces:
-                if cut_line.intersects(piece):
-                    split_result = split(piece, cut_line)
-                    new_pieces.extend(list(split_result.geoms))
-                else:
-                    new_pieces.append(piece)
-            pieces = new_pieces
-
         n_pieces = len(pieces)
         n_requests = len(self.requests)
         max_size = max(n_pieces, n_requests)

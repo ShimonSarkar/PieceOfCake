@@ -6,7 +6,8 @@ import numpy as np
 import logging
 import traceback
 import constants
-
+import math
+import itertools
 
 class Player:
     def __init__(self, rng: np.random.Generator, logger: logging.Logger,
@@ -160,43 +161,109 @@ class Player:
 
         return intersection
 
-    # def make_cuts(self):
-    #     print(self.cake_len, self.cake_width)
-    #     n = len(self.requests)
-    #     angles = [i * (360 / n) for i in range(n)]
-    #     start = (round(self.cake_width/2,2),0)
-    #     print(angles)
-    #     self.cutList.append(start)
-    #     for i in range(n):
-    #         start = self.move_angle(start, angles[i])
-    #         self.cutList.append(start)
-    #         print(start)
-
     def make_cuts(self):
-        self.requests = sorted(self.requests)
         print(self.cake_len, self.cake_width)
+        
+        # TODO: If less than area do easy zigzag
+        if self.cake_len*self.cake_width < 0:
+            pass
 
-        w= 4
-        l=[i/w for i in self.requests]
-        self.cutList.append([w,0])
-        for i in range(len(self.requests)//2 +1):
-            v= (i+2)*w
+        # TODO: Find number of vertical stacks
+        num_ver_stacks = 4
+        print(num_ver_stacks)
+
+        #TODO: Find number of horizontal stacks based on vertical stacks
+        num_stacks = 6
+
+        areas = sorted(self.requests)
+
+        #TODO: Handle extras
+        if len(areas)%num_stacks != 0:
+            pass
+
+        print(areas)
+        groups = {i: [] for i in range(num_stacks)}
+        
+        i=0
+        j=len(self.requests)-1
+        k=0
+
+        while i<=j:
+            # Small elements round robin
+            for _ in range(min(num_stacks,j-i+1)):
+                groups[k].append(areas[i])
+                i+=1
+                k=(k+1)%num_stacks
+            
+            # Large elements round robin
+            for _ in range(min(num_stacks, j-i+1)):
+                groups[k].append(areas[j])
+                j-=1
+                k=(k+1)%num_stacks
+        
+        # At this point i must be > j if we properly dealt with extras and all groups should have equal areas
+        groups = {k: sorted(v) for k, v in groups.items()}
+        print(groups)
+
+        widths = [round(sum(groups[group])/self.cake_len,2) for group in groups]
+        cum_widths = [round(s, 2) for s in itertools.accumulate(widths)]
+        print(cum_widths)
+
+        for i,w in enumerate(cum_widths):
+            # Place knife
+            if i==0:
+                self.cutList.append([w,0])
+                continue
             cur = self.cutList[-1]
-            goto = 0 if v<self.cake_width//2 else self.cake_width
-            if v-w> self.cake_width:
-                break
-            if i%2 == 0:
+            breadcrumb_goto =  0 if w<self.cake_width//2 else self.cake_width
+
+            #Up to down
+            if i%2 != 0:
                 self.cutList.append(self.move_straight(cur, 'D'))
-                self.cutList.append([goto,self.cake_len-0.02])
-                self.cutList.append([v,self.cake_len])
+                self.cutList.append([breadcrumb_goto,round(self.cake_len-0.02,2)])
+                self.cutList.append([w,self.cake_len])
+            
+            #Down to up
             else:
                 self.cutList.append(self.move_straight(cur, 'U'))
-                self.cutList.append([goto,0.02])
-                self.cutList.append([v,0])
-        self.cutList.append([self.cake_width-0.02, 0])
-        self.cutList.append([self.cake_width, l[0]])
-        self.cutList.append([0, l[-1]])
-        #self.cutList.append([self.cake_width, l[1]])
+                self.cutList.append([breadcrumb_goto,0.02])
+                self.cutList.append([min(w, self.cake_width),0])
+
+        if self.cutList[-1][0]!= self.cake_width:
+            if self.cutList[-1][1] == 0:
+                self.cutList.append(self.move_straight(self.cutList[-1], 'D'))
+                self.cutList.append([breadcrumb_goto,round(self.cake_len-0.02,2)])
+                self.cutList.append([round(self.cake_width-0.02,2),self.cake_len])
+            else:
+                self.cutList.append(self.move_straight(self.cutList[-1], 'U'))
+                self.cutList.append([breadcrumb_goto,0.02])
+                self.cutList.append([round(self.cake_width-0.02,2),0])
+        
+        #Horizontal cuts!
+        l1 = [round(small/widths[i],2) for i,small in enumerate(groups[0][:-1])]
+        l2 = [round(big/widths[i],2) for i,big in enumerate(groups[num_stacks-1][:-1])]
+        cum_l1 = [round(s, 2) for s in itertools.accumulate(l1)]
+        cum_l2 = [round(s, 2) for s in itertools.accumulate(l2)]
+        print(cum_l1, cum_l2, l1, l2)
+
+        for i,(l1,l2) in enumerate(zip(cum_l1,cum_l2)):                    
+            #Right to left from l2 to l1
+            if i%2==0:
+               self.cutList.append([self.cake_width, l2])
+               self.cutList.append([0, l1]) 
+            # Left to right from l1 to l2
+            else:
+                self.cutList.append([0,l1])
+                self.cutList.append([self.cake_width,l2])
+
+            if i < len(cum_l1)-1:
+                cur = self.cutList[-1]
+                print(cur)
+                breadcrumb_goto =  0 if cur[1]<self.cake_len//2 else self.cake_len
+                if cur[0] == 0:
+                    self.cutList.append([0.02, breadcrumb_goto])
+                else:
+                    self.cutList.append([round(self.cake_width-0.02,2), breadcrumb_goto])
         
         
 

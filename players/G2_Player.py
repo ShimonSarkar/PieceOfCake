@@ -9,13 +9,23 @@ from shapely.geometry import Polygon
 from piece_of_cake_state import PieceOfCakeState
 from players.g2.helpers import *
 from players.g2.even_cuts import *
-from players.g2.assigns import sorted_assign, index_assign, hungarian_min_penalty, dp_min_penalty
-from players.g2.assigns import greedy_best_fit_assignment
+from players.g2.uneven_cuts import *
+from players.g2.best_combination import best_combo, cuts_to_moves
+from players.g2.assigns import (
+    assign,
+    sorted_assign,
+    hungarian_min_penalty,
+    dp_min_penalty,
+    greedy_best_fit_assignment,
+)
+
 
 class Strategy(Enum):
-    SNEAK = "sneak"
+    EVEN = "even"
+    UNEVEN = "uneven"
     CLIMB_HILLS = "climb_hills"
     SAWTOOTH = "sawtooth"
+    BEST_CUTS = "best_cuts"
 
 
 class G2_Player:
@@ -41,9 +51,11 @@ class G2_Player:
         self.tolerance = tolerance
         self.cake_len = None
         self.cake_width = None
-        self.move_queue = []
-
-        self.strategy = Strategy.SNEAK
+        # stores next actions in a queue
+        # each action is a ({INIT | CUT | ASSIGN}, list) tuple
+        self.move_queue: list[tuple[int, list]] = []
+        self.strategy = None
+        self.requestscut = 0
         self.move_object = None
 
     def cut(self, cake_len, cake_width, cur_pos) -> tuple[int, List[int]]:
@@ -56,11 +68,16 @@ class G2_Player:
         self, assign_func: Callable[[list[Polygon], list[float]], list[int]]
     ) -> tuple[int, List[int]]:
 
-        assignment: list[int] = assign_func(self.polygons, self.requests, self.tolerance)
+        assignment: list[int] = assign_func(
+            self.polygons, self.requests, self.tolerance
+        )
 
         return constants.ASSIGN, assignment
 
-    def can_cake_fit_in_plate(self, cake_piece, radius=12.5):
+    def can_cake_fit_in_plate(self, cake_piece: Polygon, radius=12.5):
+        if cake_piece.area < 0.25:
+            return True
+
         cake_points = np.array(
             list(zip(*cake_piece.exterior.coords.xy)), dtype=np.double
         )
@@ -91,9 +108,9 @@ class G2_Player:
         return penalty
 
     def climb_hills(self):
-        current_penalty = self.__calculate_penalty(index_assign)
+        current_penalty = self.__calculate_penalty(assign)
         print(f"1 penalty: {current_penalty}")
-        current_penalty = self.__calculate_penalty(sorted_assign)
+        current_penalty = self.__calculate_penalty(assign)
         print(f"2 penalty: {current_penalty}")
 
         if self.turn_number == 1:
@@ -112,7 +129,26 @@ class G2_Player:
                     round((self.cur_pos[1] + 5) % self.cake_len, 2),
                 ]
 
-        return constants.ASSIGN, sorted_assign(self.polygons, self.requests)
+        return constants.ASSIGN, assign(self.polygons, self.requests)
+
+    def best_cuts(self):
+        # initialize move queue
+        if not self.move_queue:
+            if self.turn_number != 1:
+                print(f"assigning now!")
+                return self.assign(greedy_best_fit_assignment)
+
+            print(f"I'll think for a while now..")
+            best_cuts = best_combo(
+                self.requests, self.cake_len, self.cake_width, self.tolerance
+            )
+
+            self.move_queue = cuts_to_moves(
+                best_cuts, self.requests, self.cake_len, self.cake_width
+            )
+
+        # get the next move from the move queue
+        return self.move_queue.pop(0)
 
     def process_percept(self, current_percept: PieceOfCakeState):
         self.polygons = current_percept.polygons
@@ -121,29 +157,114 @@ class G2_Player:
         self.requests = current_percept.requests
         self.cake_len = current_percept.cake_len
         self.cake_width = current_percept.cake_width
+        self.cake_area = self.cake_len * self.cake_width
+        self.requestlength = len(self.requests)
+
+    def decide_strategy(self):
+        if is_uniform(self.requests, self.tolerance):
+            self.strategy = Strategy.EVEN
+            self.move_object = EvenCuts(self.requests, self.cake_width, self.cake_len)
+        elif grid_enough(self.requests, self.cake_width, self.cake_len, self.tolerance):
+            self.strategy = Strategy.UNEVEN
+            self.move_object = UnevenCuts(self.requests, self.cake_width, self.cake_len)
+        else:  # Default
+            self.strategy = Strategy.BEST_CUTS
+            self.move_object = UnevenCuts(self.requests, self.cake_width, self.cake_len)
 
     def move(self, current_percept: PieceOfCakeState) -> tuple[int, List[int]]:
         """Function which retrieves the current state of the amoeba map and returns an amoeba movement"""
         self.process_percept(current_percept)
+        if self.turn_number == 1:
+            self.decide_strategy()
 
-        if self.strategy == Strategy.SNEAK:
+        # for only 1 request:
+        if self.requestlength == 1:
             if self.turn_number == 1:
-                self.move_object = EvenCuts(
-                    len(self.requests), self.cake_width, self.cake_len
-                )
+                return constants.INIT, [0, 0]
+            elif self.requestscut < self.requestlength:
+                self.requestscut += 1
+                return constants.CUT, [
+                    round(2 * 0.05 * self.requests[0] / self.cake_len, 2),
+                    self.cake_len,
+                ]
 
+            return self.assign(assign)
+
+        elif self.cake_area <= 860:
+            if self.cake_len <= 23.507:
+                if self.turn_number == 1:
+                    self.move_queue.append([0, 0])
+                    return constants.INIT, [0, 0]
+
+                if self.requestscut < self.requestlength:
+                    polygonarea = self.requests[self.requestscut]
+                    polygonbase = round(2 * polygonarea / self.cake_len, 2)
+
+                    if self.cur_pos[1] == 0:
+                        # we're on top side of the board
+                        if self.turn_number == 2:
+                            next_move = [polygonbase, self.cake_len]
+                        else:
+                            x = round(self.move_queue[-2][0] + polygonbase, 2)
+                            y = self.cake_len
+
+                            if x > self.cake_width:
+                                x = self.cake_width
+                                y = round(
+                                    2
+                                    * self.cake_area
+                                    * 0.05
+                                    / (self.cake_width - self.move_queue[-2][0]),
+                                    2,
+                                )
+                            next_move = [x, y]
+
+                        self.move_queue.append(next_move)
+                        self.requestscut += 1
+                        return constants.CUT, next_move
+                    else:
+                        # we're on bottom of the board
+                        x = round(self.move_queue[-2][0] + polygonbase, 2)
+                        y = 0
+
+                        if x > self.cake_width:
+                            x = self.cake_width
+                            y = self.cake_len - round(
+                                2
+                                * self.cake_area
+                                * 0.05
+                                / (self.cake_width - self.move_queue[-2][0]),
+                                2,
+                            )
+                        next_move = [x, y]
+                        self.move_queue.append(next_move)
+                        self.requestscut += 1
+                        return constants.CUT, next_move
+                return self.assign(assign)
+
+        elif self.strategy == Strategy.EVEN:
             move = self.move_object.move(self.turn_number, self.cur_pos)
             if move == None:
                 if len(self.requests) < 10:
-                    #print("Brute Force!")
+                    # print("Brute Force!")
                     return self.assign(greedy_best_fit_assignment)
                 else:
                     return self.assign(greedy_best_fit_assignment)
+                return self.assign(assign)
+
+            return move
+
+        elif self.strategy == Strategy.UNEVEN:
+            move = self.move_object.move(self.turn_number, self.cur_pos)
+            if move == None:
+                return self.assign(assign)
 
             return move
 
         elif self.strategy == Strategy.CLIMB_HILLS:
             return self.climb_hills()
+        elif self.strategy == Strategy.BEST_CUTS:
+            return self.best_cuts()
 
         # default
         return self.climb_hills()
