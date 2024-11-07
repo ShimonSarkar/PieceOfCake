@@ -3,6 +3,7 @@ import pickle
 from typing import List, Tuple
 from collections import deque
 
+import pulp
 import numpy as np
 import logging
 from scipy.optimize import linear_sum_assignment
@@ -246,4 +247,67 @@ class Player:
         cake_points = np.array(list(zip(*cake_piece.exterior.coords.xy)), dtype=np.double)
         res = miniball.miniball(cake_points)
         return res["radius"] <= radius
+    
+    def MILP(self, cuts, current_percept):
+        requests = sorted(current_percept.requests)
+        cake_len = current_percept.cake_len
+        cake_width = current_percept.cake_width
+        best_penalty = float('inf')
+        best_row, best_col = None, None
+        best_xcuts = []
+        best_ycuts = []
+
+        for dims, cut in cuts.items():
+            num_rows, num_cols = dims
+            row_height, col_width = cake_len / num_rows, cake_width / num_cols
+            hcuts, vcuts = cut
+
+            prob = pulp.LpProblem('CakeCutting', pulp.LpMinimize)
+
+            x_cuts = [(pulp.LpVariable(f"x_{i}_start", i * col_width, (i+1) * col_width, pulp.LpContinuous),
+                pulp.LpVariable(f"x_{i}_end", i * col_width, (i+1) * col_width, pulp.LpContinuous)) 
+                for i in range(num_cols - 1)]
+            
+            y_cuts = [(pulp.LpVariable(f"y_{j}_start", j * row_height, (j+1) * row_height, pulp.LpContinuous),
+                pulp.LpVariable(f"y_{j}_end", j * row_height, (j+1) * row_height, pulp.LpContinuous)) 
+                for j in range(num_rows - 1)]
+            
+            assignments = [[pulp.LpVariable(f"z_{p}_{q}_{k}", cat=pulp.LpBinary) for k in range(len(requests))]
+                for p in range(num_cols - 1) for q in range(num_rows - 1)]
+            
+            areas = np.full((num_cols - 1, num_rows - 1), row_height * col_width)
+
+            prob += pulp.lpSum(assignments[p][q][k] * abs(areas[p, q] - requests[k])
+                for p in range(num_cols - 1) for q in range(num_rows - 1) for k in range(len(requests)))
+            
+            for k in range(len(requests)):
+                prob += pulp.lpSum(assignments[p][q][k] for p in range(num_cols - 1) for q in range(num_rows - 1)) == 1
+
+            # Area constraint: ensure the polygon area is within the tolerance for each assigned polygon
+            for p in range(num_cols - 1):
+                for q in range(num_rows - 1):
+                    for k in range(len(requests)):
+                        prob += assignments[p][q][k] * (areas[p, q] - requests[k]) <= self.tolerance * requests[k]
+                        prob += assignments[p][q][k] * (requests[k] - areas[p, q]) <= self.tolerance * requests[k]
+
+            # Fit constraint for each rectangle: ensure each fits within the plate's 25 cm diameter
+            for p in range(num_cols - 2):
+                for q in range(num_rows - 2):
+                    width = abs(x_cuts[p + 1][0] - x_cuts[p][1])
+                    height = abs(y_cuts[q + 1][0] - y_cuts[q][1])
+                    prob += width**2 + height**2 <= (25 / 100)**2
+
+            prob.solve()
+            penalty = pulp.value(prob.objective)
+
+            if penalty < best_penalty:
+                best_penalty = penalty
+                best_row, best_col = num_rows, num_cols
+                best_xcuts = [[pulp.value(x_start), pulp.value(x_end)] for (x_start, x_end) in x_cuts]
+                best_ycuts = [[pulp.value(y_start), pulp.value(y_end)] for (y_start, y_end) in y_cuts]
+
+
+
+
+
 
